@@ -1,121 +1,39 @@
-"""
-Notes
-
-- Construct edge sets
-- Assign vertices to levels according to a certain promotion rule
-- x_l is the most recent vertex 
-- Levels have to be updated all the time
-- Levels are periodically rebuilt from scratch - when l = k*(s_i/32)
-    where s_i = 2^i / p for level Li and probability p
-    refer to s_i as the TARGET SIZE for level Li
-- candidate set for finding next vertex x_l+1
-"""
-
-"""
-We have G = (V, E), with probability p, x1 ≺ x2 ≺ ... ≺ xn is the true order
-
-edge (u, v) is STOCHASTIC if it truly is the random edge
-edge (u, v) is DETERMINISTIC if it is was manually included in the graph
-    i.e. it's an edge of the true ordering path
-
-vertices are found one at a time
-when a vertex is found, we say it's DISCOVERED
-    as convention, define xl to be the most recent discovered vertex
-
-rank of a vertex - its rank out of the not yet discovered vertices
-{xl+1, ..., xn}
-    hence, for a vertex v, r(v) is the rank, so v = x(l+r(v))
-
-the algorithm only considers the task of finding x1, ... x(n/2).
-With a symmetric argument, xn, ..., x(n/2+1) can be found
-"""
-
-"""
-#### CONSTRUCTING THE EDGE SETS ####
-
-Edge sets E1, E2, ... Eq where q = O(lg(pn))
-    these sets are made once and NEVER modified.
-
-Ei(u, v) - indicator random variable for whether (u, v) in Ei
-E(u, v) - tuple <E1(u, v), E2(u, v), ..., Eq(u, v)>
-
-these sets are not necessarily disjoint
-"""
-
-from math import log
-# from sympy import symbols, solve
-# from sympy.core.numbers import Float
+from itertools import combinations
 from random import random, choice
-from math import floor, log2
-# import networkx as nx
+import networkx as nx
+from time import perf_counter
 
-# def calculate_alpha(p, q):
-#     x = symbols("x") # "alpha"
-
-#     prod = 1
-#     for i in range (1, q+1):
-#         prod *= (1 - (x*p) / (2 ** i))
-
-#     prod -= (1 - p)
-#     solution = solve(prod, x)
-#     solution = filter(lambda elem: isinstance(elem, Float) and 
-#         1 < elem and elem < 2, solution)
-#     return float(list(solution)[0])
-
-# def edge_sets_sample_probability(p, q, alpha):
-    # l = []
-    # while True:
-    #     for i in range(q):
-    #         l.append(1 if random() < alpha*p / 2 **(i+1) else 0)
-
-    #     if l.count(1) > 0:
-    #         break
-    #     else:
-    #         l = []
-    
-    # return l.count(1) / q # q == len(l)
-    # return 0.6
+def t(start):
+    return round(perf_counter() - start, 7)
 
 def query(u, v):
     return u < v
 
-def construct_edge_sets(n, edges, q, prob):
+def random_graph(n, p):
     """
-    If you read the paper, where it explains how to make these edge sets
-    it needs to solve for some variable "alpha", which is my parameter 
-    "prob" here. I implemented solving for this alpha above, using sympy,
-    but I just fixed some probability to avoid complications for now, as
-    I didn't fully understand it - other stuff is more important
+    Create Erdos Renyi random graph G(n, p)
+    with planted Hamiltonian path
     """
-    # prob = edge_sets_sample_probability(p, q, calculate_alpha(p, q))
-    necessary_edges = set()
-    for i in range(n-1):
-        # since it will rarely happen that I will add all edges to all levels,
-        # I say "okay", these are the ones you have to have in the levels at the
-        # very least, since these make up the Hamiltonian path
-        necessary_edges.add((i, i+1))
-        necessary_edges.add((i+1, i))
-    while True:
-        E = {i: [] for i in range(q)}
-        s = set()
-        for edge in edges:
-            for num, level in E.items():
-                if random() < prob:
-                    level.append(edge)
-                    s.add(edge)
-        # should be =, or at the very least, ask
-        # if at least the edges from the Ham. path have been included
-        # idk if this is good
-        if len(s) > 0.9*len(edges) and len(necessary_edges.intersection(s)) == len(necessary_edges):
-            return E
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
 
-def find_min(nodes, edges):
+    # Include Hamiltonian path
+    for i in range(n):
+        G.add_edge(i, (i+1) % n)
+
+    edges = combinations(range(n), 2)
+    for e in edges:
+        if random() < p:
+            G.add_edge(*e)
+    return G
+
+def find_min(graph: nx.Graph):
     """
-    "Directly" from paper
+    Find the first smallest element
     """
     min_elem = None
     s = set()
-    edge = choice(edges)
+    edge = choice(list(graph.edges))
     u, v = edge
     if query(u, v):
         min_elem = u
@@ -124,28 +42,49 @@ def find_min(nodes, edges):
         min_elem = v
         s.add(u)
     
-    # this loop can be optimized looking at the paper 
-    # but this function at least works properly xD
-    for u in nodes:
-        if (u, min_elem) in edges and u not in s:
-            if query(u, min_elem):
-                s.add(min_elem)
-                min_elem = u
-            else:
-                s.add(u)
+    # only neighbors can be the next min
+    current_neighbors = graph[min_elem]
+    while True:
+        for u in current_neighbors:
+            still_adding = False
+            if u not in s:
+                # u may potentially be the smallest element
+                still_adding = True
+                if query(u, min_elem):
+                    # we established u < min_elem so we break here
+                    # to stop looking at min_elem's neighbors,
+                    # and we move onto the neighbors of u
+                    s.add(min_elem)
+                    min_elem = u
+                    current_neighbors = graph[min_elem]
+                    break
+                else:
+                    # u is not the smallest element
+                    s.add(u)
+        if not still_adding:
+            # if we have not added a new element to s,
+            # it means we found the smallest element
+            break
     return min_elem
 
-def create_level(edge_sets, levels, elim, i, c):
+def create_level(levels, elim, i):
     """
-    "Directly" from paper
+    This one is taking the most amount of time
+    (probably because of the .copy() function)
     """
     while i >= 0:
         levels[i] = levels[i+1].copy()
+        if len(levels[i]) == 0:
+            i -= 1
+            continue
         for v in levels[i+1]:
             elim[v] = None
-            for u in levels[min(i+c, len(levels)-1)]: # min is here so that we don't go out of bounds
-                if (u, v) in edge_sets[i] and query(u, v):
+            # in paper it's not last level but level i+c but I removed c
+            # for ease of implementation, I can always add it later
+            for u in levels[-1]: # topmost level containing all the vertices
+                if query(u, v):
                     if v in levels[i]:
+                        # should not have this if I don't think but okay
                         levels[i].remove(v)
                     elim[v] = u
         
@@ -157,151 +96,104 @@ def lowest_level_containing(node, levels):
         if node in level:
             return i
 
-def increment(last_min, nodes, levels, edge_sets, elim, c):
+def increment(graph: nx.Graph, last_min, levels, elim):
     """
-    More or less "directly" from paper
+    Incremental updates to levels
     """
+    # the previous min is no longer a part of the levels
     for level in levels:
         if last_min in level:
             level.remove(last_min)
 
-    for v in nodes:
+    for v in graph.nodes:
+        # For each node that was blocked by last_min, do smt
         if elim[v] != last_min:
             continue
         elim[v] = None
         i = lowest_level_containing(v, levels)
-        i = min(i, len(edge_sets) - 1) # otherwise it goes out of bounds
         while i > 1:
-            for u in levels[min(i+c, len(levels)-1)]: # otherwise out of bounds problem
-                if (u, v) in edge_sets[i]:
-                    if query(u, v):
-                        elim[v] = u
-                        break
+            # again, in paper it's not last level but level i+c 
+            # but I removed c for ease of implementation
+            for u in levels[-1]:
+                if query(u, v):
+                    elim[v] = u
+                    break
             i = i - 1
             levels[i-1].append(v)
         
-def find(remaining_nodes, edges, previous_min, q, levels):
+def find(graph: nx.Graph, last_min, levels, current_sorting, q):
     """
-    If this function could perhaps work, maybe we'd have the
-    algorithm - at the very least it would do something
+    Find the next min element
     """
+    # Make the candidate set - neighbors of last_min!!!!!!!
+    neighbors = list(graph[last_min])
     s = set()
-    for v in remaining_nodes:
-        # remaining_nodes cuz it says "for each v not in {x1, ..., x_l-1}"
-        if v in levels[0] and (previous_min, v) in edges:
+    for v in neighbors:
+        if v not in current_sorting and v in levels[0]:
+            # Only if not already sorted, and it's in the last level,
+            # AND it's a neighbor to last min, it's a candidate
+            # the next min element is guaranteed to be here
+            # because of the included Hamiltonian path
             s.add(v)
+    
+    if len(s) == 1:
+        for elem in s:
+            break
+        return elem
 
+    # This loop actually never happens lmao
     for i in range(q):
-        for v in s:
+        for v in s: 
             for u in levels[i]:
-                if (u, v) in edges:
+                if (u, v) in graph.edges:
                     if query(u, v):
                         s.remove(v)
-                print(len(s))
                 if len(s) == 1:
-                    for elem in s: # select the only element
+                    for elem in s:
                         break
                     return elem
-    # this function USUALLY returns none and that bothers me
 
-def highest_power_of_2(n):
-    # found this online, don't ask me xD
-    # it's for the 1 + "largest exponent of 2 dividing l'" from the paper
-    return int(log2((n & (~(n - 1))))) 
-
-def update(l, p):
-    x = l + 1
-    while True:
-        if l == floor(x / (16 * p)):
-            break
-        x = x + 1
-    return 1 + highest_power_of_2(x)
-
-def stochastic_sort(nodes, edges, p, q, c, edge_set_prob):
+def stochastic_sort(graph: nx.Graph, p, q):
+    """
+    I removed the "c" parameter, I just have 
+    q levels that I will maintain and I have the q+1
+    level to have all the nodes, and likewise level q+2
+    I will increase this if necessary
+    """
     # Set up
     levels = []
-    levels.append([])
-    n = len(nodes)
-    for i in range(q + c): # this many levels
+    n = graph.number_of_nodes()
+    start = perf_counter()
+    for i in range(q+1): # this many levels
         if i < q-1:
             levels.append([]) # the idea is to construct the lower levels from the top ones
         else:
-            levels.append(nodes) # the topmost levels have all the nodes
-    elim = [None] * len(nodes)
-    edge_sets = construct_edge_sets(n, edges, q, edge_set_prob) # construct the edge sets
-    levels = create_level(edge_sets, levels, elim, q-1, c) # create bottom levels
-    sorting = []
-    remaining_nodes = nodes.copy()
+            levels.append(list(graph.nodes)) # the topmost levels have all the nodes
 
-    for l in range(round(n/2)):
+    print(f"\tMaking \"levels\": {t(start)}s")
+    elim = [None] * n
+    start = perf_counter()
+    levels = create_level(levels, elim, q-1) # create bottom levels
+    print(f"\tCreated all levels: {t(start)}s")
+    sorting = []
+
+    # paper does it for first n/2 nodes but we can 
+    # go all the way to n cuz we're too good at this game
+    for l in range(n):
         if l == 0:
-            min_node = find_min(nodes, edges)
+            # start = perf_counter()
+            min_node = find_min(graph)
+            # print(f"\tFound first node: {t(start)}s")
         else:
-            # this is sadly always none =(
-            min_node = find(remaining_nodes, edges, min_node, q, levels)
+            # start = perf_counter()
+            min_node = find(graph, min_node, levels, sorting, q)
+            # print(f"\tFound next node ({l+1}): {t(start)}s")
 
         sorting.append(min_node)
-        if min_node in remaining_nodes:
-            remaining_nodes.remove(min_node)
-
-        increment(min_node, nodes, levels, edge_sets, elim, c)
-        # min here is to not get out of bounds issue
-        levels = create_level(edge_sets, levels, elim, min(q-1, update(l, p)), c)  
+        start = perf_counter()
+        increment(graph, min_node, levels, elim)
+        # print(f"\tIncrement on iter {l+1}: {t(start)}s")
+        # # min here is to not get out of bounds issue
+        # levels = create_level(edge_sets, levels, elim, min(q-1, update(l, p)), c)  
     
     return sorting
-
-def order(i, j):
-    return (i, j) if i < j else (j, i)
-
-def create_graph(n, p):
-    """
-    Create a random graph with a Hamiltonian path
-    THIS FUNCTION ACTUALLY WORKS!!!! unlike others -_-
-    """
-    nodes = list(range(n))
-    edges = []
-    for i in range(n-1):
-        # Include the Hamiltonian path
-        edges.append((i, i+1))
-        edges.append((i+1, i))
-
-    for i in range(n-1):
-        for j in range(1, n):
-            if i != j and order(i, j) not in edges and random() < p:
-                edges.append((i, j))
-                edges.append((j, i))
-    
-    return nodes, edges
-
-
-n = 100
-p = 0.4
-q = round(log(p*n)) # paper said q = O(log(np)) B)
-nodes, edges = create_graph(n, p)
-# import networkx as nx
-# g = nx.Graph()
-# g.add_nodes_from(nodes)
-# g.add_edges_from(edges)
-# first_half = g.subgraph(nodes[0:round(n/2)])
-# first_half_nodes = list(g.nodes())
-# first_half_edges = list(g.edges())
-# second_half = g.subgraph(nodes[round(n/2)+1:])
-# nodes = [0, 1, 2, 3, 4, 5]
-# edges = [(0, 1), (1, 0), 
-#     (1, 2), (2, 1),
-#     (0, 2), (2, 0),
-#     (0, 3), (3, 0),
-#     (3, 5), (5, 3),
-#     (4, 5), (5, 4),
-#     (4, 1), (1, 4)]
-
-"""
-Beware: the algorithm sorts half the nodes to begin with!
-but it doesn't work B)
-"""
-result = stochastic_sort(nodes, edges, p, q, 10, 0.7)
-print(result)
-
-# prob = 0.5
-# E = construct_edge_sets(edges, q, 0.5)
-# print(E)
