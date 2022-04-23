@@ -8,7 +8,6 @@ for n in [10, 100, 1000]:
     print("=========================="*2)
     print(f"Size: {n}")
     q = max(2, round(log(p*n))) # paper said q = O(log(np)) B)
-    print(q)
     graph = random_graph(n, p)
     nodes = list(graph.nodes)
 

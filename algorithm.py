@@ -163,14 +163,14 @@ def stochastic_sort(graph: nx.Graph, p, q):
     # Set up
     levels = []
     n = graph.number_of_nodes()
-    start = perf_counter()
+    # start = perf_counter()
     for i in range(q+1): # this many levels
         if i < q-1:
             levels.append([]) # the idea is to construct the lower levels from the top ones
         else:
             levels.append(list(graph.nodes)) # the topmost levels have all the nodes
 
-    print(f"\tMaking \"levels\": {t(start)}s")
+    # print(f"\tMaking \"levels\": {t(start)}s")
     elim = [None] * n
     start = perf_counter()
     levels = create_level(levels, elim, q-1) # create bottom levels
@@ -179,6 +179,7 @@ def stochastic_sort(graph: nx.Graph, p, q):
 
     # paper does it for first n/2 nodes but we can 
     # go all the way to n cuz we're too good at this game
+    start_sort = perf_counter()
     for l in range(n):
         if l == 0:
             # start = perf_counter()
@@ -195,5 +196,5 @@ def stochastic_sort(graph: nx.Graph, p, q):
         # print(f"\tIncrement on iter {l+1}: {t(start)}s")
         # # min here is to not get out of bounds issue
         # levels = create_level(edge_sets, levels, elim, min(q-1, update(l, p)), c)  
-    
+    print(f"\tActual sorting part (total): {t(start_sort)}s")
     return sorting
